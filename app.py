@@ -1,158 +1,109 @@
 import streamlit as st
-
-# Robust import block
-missing_packages = []
-
-try:
-    import yfinance as yf
-except ImportError:
-    missing_packages.append("yfinance")
-try:
-    import pandas as pd
-except ImportError:
-    missing_packages.append("pandas")
-try:
-    import numpy as np
-except ImportError:
-    missing_packages.append("numpy")
-try:
-    import matplotlib.pyplot as plt
-except ImportError:
-    missing_packages.append("matplotlib")
-try:
-    import plotly.graph_objs as go
-except ImportError:
-    missing_packages.append("plotly")
-try:
-    from keras.models import Sequential, load_model
-    from keras.layers import LSTM, Dense, Dropout
-except ImportError:
-    missing_packages.append("keras / tensorflow")
-try:
-    from sklearn.preprocessing import MinMaxScaler
-except ImportError:
-    missing_packages.append("scikit-learn")
-
-if missing_packages:
-    st.error(f"The following packages are required but not installed: {', '.join(missing_packages)}. Please ensure your requirements.txt includes them and restart the app.")
-    st.stop()
-
-
-
-import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import date
+from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential, load_model
 from keras.layers import LSTM, Dense, Dropout
-from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 import os
 
-st.set_page_config(page_title="Stock Prediction Pro", layout="wide")
-st.title('📈 Stock Trend Prediction Web App')
+st.set_page_config("Stock Price Forecast", layout="wide")
+st.title("📈 Stock Price Forecast with LSTM")
 
-# Sidebar for user input
-st.sidebar.title("Configuration & Help")
-st.sidebar.write("Enter a valid stock ticker (e.g., AAPL, MSFT) to forecast its closing prices using LSTM.")
-ticker = st.sidebar.text_input('Ticker', value='AAPL')
-start_date = st.sidebar.date_input('Start Date', date(2015,1,1))
-end_date = st.sidebar.date_input('End Date', date.today())
+with st.sidebar:
+    st.header("Instructions")
+    st.markdown("""
+    1. Enter a valid stock ticker symbol (e.g., **AAPL**, **MSFT**, **TSLA**).
+    2. Press **Fetch Data** to load, view, and analyze historical prices.
+    3. View the forecast results below.
+    """)
+    ticker = st.text_input('Ticker symbol', value='AAPL', max_chars=8)
+    run_button = st.button("Fetch Data")
 
-# Data download and preview
-with st.spinner('Downloading stock data from Yahoo Finance...'):
-    df = yf.download(ticker, start=start_date, end=end_date)
-if df.empty:
-    st.error("No data found. Please try a different ticker or date range.")
+if (not run_button) and "df" not in st.session_state:
+    st.info("Enter a ticker and click 'Fetch Data' to begin.")
     st.stop()
+if run_button:
+    try:
+        df = yf.download(ticker, start='2015-01-01', end=date.today())
+        if df.empty:
+            st.error("Ticker not found or no data. Try another symbol.")
+            st.stop()
+        st.session_state['df'] = df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        st.stop()
 
-st.success("Data download successful!")
-st.subheader(f'Data for {ticker.upper()} from {start_date} to {end_date} ({len(df)} rows)')
-st.dataframe(df.tail())
-st.download_button(label="Download CSV", data=df.to_csv().encode(), file_name=f"{ticker}.csv")
+df = st.session_state['df']
+st.success(f"{ticker.upper()} data loaded: {df.index.min().date()} - {df.index.max().date()}  ({len(df)} rows).")
+st.download_button("Download CSV", data=df.to_csv().encode(), file_name=f"{ticker}.csv")
 
-# Plotly chart for interactive, beautiful plots
-st.subheader("Interactive Price Visualization (Plotly)")
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close', line=dict(color='royalblue')))
-fig.add_trace(go.Scatter(x=df.index, y=df['Close'].rolling(100).mean(), name='100MA', line=dict(color='red')))
-fig.add_trace(go.Scatter(x=df.index, y=df['Close'].rolling(200).mean(), name='200MA', line=dict(color='green')))
-fig.update_layout(title=f"Closing Price and Moving Averages for {ticker.upper()}",
-                  xaxis_title="Date", yaxis_title="Price ($)", legend=dict(orientation="h"))
+# Visualization section
+st.subheader("Closing Price and Moving Averages (Interactive)")
+fig = go.Figure([
+    go.Scatter(x=df.index, y=df['Close'], name='Close', line=dict(color="royalblue")),
+    go.Scatter(x=df.index, y=df['Close'].rolling(100).mean(), name='100-Day MA', line=dict(color="firebrick")),
+    go.Scatter(x=df.index, y=df['Close'].rolling(200).mean(), name='200-Day MA', line=dict(color="forestgreen"))
+])
+fig.update_layout(margin=dict(t=30,r=30,b=30,l=10), legend=dict(orientation="h",yanchor="bottom"), xaxis_title="Date", yaxis_title="Price ($)")
 st.plotly_chart(fig, use_container_width=True)
 
-# Data preparation
-df_model = df[['Close']].copy()
-split = int(len(df_model)*0.7)
-data_training = df_model[:split]
-data_testing = df_model[split:]
+# Prepare data for LSTM
+close_prices = df[['Close']]
+split = int(len(close_prices) * 0.7)
+train = close_prices.iloc[:split]
+test = close_prices.iloc[split:]
 
-# Scale on training only (ML best practice)
-scaler = MinMaxScaler(feature_range=(0,1))
-data_training_arr = scaler.fit_transform(data_training)
+scaler = MinMaxScaler()
+train_scaled = scaler.fit_transform(train)
 
-# Prepare x_train, y_train
-x_train, y_train = [], []
 window = 100
-for i in range(window, len(data_training_arr)):
-    x_train.append(data_training_arr[i-window:i])
-    y_train.append(data_training_arr[i, 0])
-x_train, y_train = np.array(x_train), np.array(y_train)
+def make_sequences(data, window=100):
+    xs, ys = [], []
+    for i in range(window, len(data)):
+        xs.append(data[i-window:i])
+        ys.append(data[i,0])
+    return np.array(xs), np.array(ys)
 
-# LSTM or Load Model with progress indicator
-model_path = f"{ticker}_stock_model.keras"
+X_train, y_train = make_sequences(train_scaled, window)
+
+model_path = f"{ticker}_lstm.keras"
 if os.path.exists(model_path):
-    with st.spinner('Loading pre-trained LSTM model...'):
-        model = load_model(model_path)
-    st.toast('Loaded pre-trained model', icon="🧠")
+    model = load_model(model_path)
+    st.info("Loaded pre-trained LSTM model.")
 else:
-    with st.spinner('Training LSTM model...please wait'):
+    with st.spinner("Training new LSTM model... Please wait."):
         model = Sequential()
-        model.add(LSTM(units=50, activation='relu', return_sequences=True, input_shape=(x_train.shape[1], 1)))
+        model.add(LSTM(60, activation='relu', return_sequences=True, input_shape=(X_train.shape[1], 1)))
         model.add(Dropout(0.2))
-        model.add(LSTM(units=60, activation='relu', return_sequences=True))
-        model.add(Dropout(0.3))
-        model.add(LSTM(units=80, activation='relu', return_sequences=True))
-        model.add(Dropout(0.4))
-        model.add(LSTM(units=120, activation='relu'))
-        model.add(Dropout(0.5))
-        model.add(Dense(units=1))
+        model.add(LSTM(60, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(1))
         model.compile(optimizer='adam', loss='mean_squared_error')
-        model.fit(x_train, y_train, epochs=20, verbose=0)
+        model.fit(X_train, y_train, epochs=15, batch_size=32, verbose=0)
         model.save(model_path)
-    st.toast('Model trained and saved!', icon="✅")
+    st.success("Model trained and saved.")
 
-# Prepare test set (keep scale from train)
-past_100_days = data_training.tail(window)
-final_df = pd.concat([past_100_days, data_testing])
-input_data = scaler.transform(final_df)
+# Testing
+total_data = pd.concat([train.tail(window), test])
+inputs = scaler.transform(total_data)
+X_test, y_test = make_sequences(inputs, window)
 
-x_test, y_test = [], []
-for i in range(window, input_data.shape[0]):
-    x_test.append(input_data[i-window:i])
-    y_test.append(input_data[i, 0])
-x_test, y_test = np.array(x_test), np.array(y_test)
-
-# Predict
-with st.spinner("Predicting with LSTM model..."):
-    y_predicted = model.predict(x_test)
-
-# Inverse scaling
-y_predicted = scaler.inverse_transform(np.concatenate([y_predicted, np.zeros((y_predicted.shape[0], 0))], axis=1))[:,0]
+# Prediction
+y_pred = model.predict(X_test)
+y_pred_inv = scaler.inverse_transform(np.concatenate([y_pred, np.zeros((y_pred.shape[0], 0))], axis=1))[:,0]
 y_test_inv = scaler.inverse_transform(np.concatenate([y_test.reshape(-1,1), np.zeros((y_test.shape[0], 0))], axis=1))[:,0]
 
-# Plot result
+# Plot predictions
 st.subheader("Predicted vs Actual Closing Price")
-fig2 = plt.figure(figsize=(14,6))
-plt.plot(y_test_inv, label='Original Price', color='blue')
-plt.plot(y_predicted, label='Predicted Price', color='red')
-plt.xlabel('Time')
-plt.ylabel('Stock Price')
-plt.legend()
-st.pyplot(fig2)
+line_fig = go.Figure([
+    go.Scatter(y=y_test_inv, mode="lines", name="Actual", line=dict(color="royalblue")),
+    go.Scatter(y=y_pred_inv, mode="lines", name="Predicted", line=dict(color="orangered"))
+])
+line_fig.update_layout(xaxis_title="Time", yaxis_title="Price ($)", margin=dict(t=20,r=20,b=20,l=10))
+st.plotly_chart(line_fig, use_container_width=True)
 
-# Clean up UI/footer
-st.info("Built with Streamlit, yfinance, Keras. Adjust model architecture, add more indicators, or experiment further for research or hobby purposes.")
+st.caption("Tip: Retrain model by deleting the .keras file. This is a research demo—do not use for investing decisions.")
 
