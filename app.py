@@ -63,20 +63,25 @@ ma200 = close.rolling(200).mean() if len(close) >= 200 else None
 # Plot closing price and MAs
 st.subheader("Closing Price and Moving Averages (Interactive Chart)")
 fig = go.Figure()
+
+# Always add close price trace
 fig.add_trace(go.Scatter(x=close.index, y=close, mode='lines', name='Close', line=dict(color='royalblue')))
 
+# Add 100 MA if valid
+if ma100 is not None and ma100.size > 0:
+    if np.any(ma100.notna().values):
+        fig.add_trace(go.Scatter(x=ma100.index, y=ma100, mode='lines', name='100-Day MA', line=dict(color='firebrick')))
+    else:
+        if len(close) < 100:
+            st.info("Not enough data for 100-Day Moving Average")
 
-if ma100 is not None and ma100.size > 0 and np.any(ma100.notna().values):
-    fig.add_trace(go.Scatter(x=ma100.index, y=ma100, mode='lines', name='100-Day MA', line=dict(color='firebrick')))
-else:
-    if len(close) < 100:
-        st.info("Not enough data for 100-Day Moving Average")
-
-if ma200 is not None and ma200.size > 0 and np.any(ma200.notna().values):
-    fig.add_trace(go.Scatter(x=ma200.index, y=ma200, mode='lines', name='200-Day MA', line=dict(color='forestgreen')))
-else:
-    if len(close) < 200:
-        st.info("Not enough data for 200-Day Moving Average")
+# Add 200 MA if valid
+if ma200 is not None and ma200.size > 0:
+    if np.any(ma200.notna().values):
+        fig.add_trace(go.Scatter(x=ma200.index, y=ma200, mode='lines', name='200-Day MA', line=dict(color='forestgreen')))
+    else:
+        if len(close) < 200:
+            st.info("Not enough data for 200-Day Moving Average")
 
 fig.update_layout(
     xaxis_title="Date",
@@ -86,7 +91,7 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Warn if data too small for meaningful prediction
+# Warn if not enough data points
 if len(close) < 120:
     st.warning("Less than 120 rows of data available. Model training and predictions may be inaccurate or skipped.")
 
@@ -129,9 +134,9 @@ if os.path.exists(model_path):
 else:
     with st.spinner("Training LSTM model. Please wait..."):
         model = Sequential()
-        model.add(LSTM(60, activation='relu', return_sequences=True, input_shape=(window,1)))
+        model.add(LSTM(units=60, activation='relu', return_sequences=True, input_shape=(window,1)))
         model.add(Dropout(0.2))
-        model.add(LSTM(60, activation='relu'))
+        model.add(LSTM(units=60, activation='relu'))
         model.add(Dropout(0.2))
         model.add(Dense(1))
         model.compile(optimizer='adam', loss='mean_squared_error')
