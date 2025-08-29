@@ -7,3 +7,4 @@ matplotlib>=3.5.0
 keras>=2.12.0
 tensorflow>=2.12.0
 plotly>=5.9.0
+streamlit-aggrid>=0.8.0
