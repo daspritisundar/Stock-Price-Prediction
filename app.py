@@ -9,101 +9,134 @@ from keras.layers import LSTM, Dense, Dropout
 import plotly.graph_objs as go
 import os
 
-st.set_page_config("Stock Price Forecast", layout="wide")
-st.title("📈 Stock Price Forecast with LSTM")
+st.set_page_config("Stock Price Predictor", layout="wide")
+st.title("📈 Stock Price Predictor with LSTM")
 
+# Sidebar - User inputs and instructions
 with st.sidebar:
-    st.header("Instructions")
+    st.header("Configuration & Instructions")
     st.markdown("""
-    1. Enter a valid stock ticker symbol (e.g., **AAPL**, **MSFT**, **TSLA**).
-    2. Press **Fetch Data** to load, view, and analyze historical prices.
-    3. View the forecast results below.
+    1. Enter a stock ticker symbol (e.g. AAPL, MSFT, TSLA).  
+    2. Click 'Fetch Data' to download historical prices and analyze.  
+    3. View recent prices, trend chart, model training & prediction below.  
+    Note: Model requires at least 100+ data points to train.
     """)
-    ticker = st.text_input('Ticker symbol', value='AAPL', max_chars=8)
-    run_button = st.button("Fetch Data")
+    ticker = st.text_input("Ticker symbol", 'AAPL', max_chars=8)
+    run = st.button("Fetch Data")
 
-if (not run_button) and "df" not in st.session_state:
-    st.info("Enter a ticker and click 'Fetch Data' to begin.")
+if (not run) and "df" not in st.session_state:
+    st.info("Enter a ticker and click 'Fetch Data' to start.")
     st.stop()
-if run_button:
+
+if run:
     try:
-        df = yf.download(ticker, start='2015-01-01', end=date.today())
+        df = yf.download(ticker, start="2015-01-01", end=date.today())
         if df.empty:
-            st.error("Ticker not found or no data. Try another symbol.")
+            st.error("No data found for that ticker. Try a different symbol.")
             st.stop()
+        # Keep only 'Close' for now
+        df = df[["Close"]].copy()
+        df.index.name = "Date"
         st.session_state['df'] = df
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error fetching data: {e}")
         st.stop()
 
 df = st.session_state['df']
-st.success(f"{ticker.upper()} data loaded: {df.index.min().date()} - {df.index.max().date()}  ({len(df)} rows).")
+st.success(f"{ticker.upper()} data loaded. ({len(df)} rows from {df.index.min().date()} to {df.index.max().date()})")
+st.subheader("Recent Prices (last 100 rows)")
+st.dataframe(df.tail(100), use_container_width=True)
 st.download_button("Download CSV", data=df.to_csv().encode(), file_name=f"{ticker}.csv")
 
-# Visualization section
+# Calculate moving averages only if sufficient data
+close = df['Close']
+ma100 = close.rolling(100).mean() if len(close) >= 100 else None
+ma200 = close.rolling(200).mean() if len(close) >= 200 else None
+
 st.subheader("Closing Price and Moving Averages (Interactive)")
-fig = go.Figure([
-    go.Scatter(x=df.index, y=df['Close'], name='Close', line=dict(color="royalblue")),
-    go.Scatter(x=df.index, y=df['Close'].rolling(100).mean(), name='100-Day MA', line=dict(color="firebrick")),
-    go.Scatter(x=df.index, y=df['Close'].rolling(200).mean(), name='200-Day MA', line=dict(color="forestgreen"))
-])
-fig.update_layout(margin=dict(t=30,r=30,b=30,l=10), legend=dict(orientation="h",yanchor="bottom"), xaxis_title="Date", yaxis_title="Price ($)")
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=close.index, y=close, mode='lines', name='Close', line=dict(color='royalblue')))
+if ma100 is not None and not ma100.isna().all():
+    fig.add_trace(go.Scatter(x=close.index, y=ma100, mode='lines', name='100-Day MA', line=dict(color='firebrick')))
+else:
+    st.info("Not enough data for 100-day moving average.")
+
+if ma200 is not None and not ma200.isna().all():
+    fig.add_trace(go.Scatter(x=close.index, y=ma200, mode='lines', name='200-Day MA', line=dict(color='forestgreen')))
+else:
+    if len(close) < 200:
+        st.info("Not enough data for 200-day moving average.")
+
+fig.update_layout(
+    xaxis_title="Date", yaxis_title="Price ($)",
+    margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h")
+)
 st.plotly_chart(fig, use_container_width=True)
 
+# Warn for low data
+if len(close) < 120:
+    st.warning("Less than 120 rows of data available. Model training and predictions may be inaccurate or skipped.")
+
 # Prepare data for LSTM
-close_prices = df[['Close']]
-split = int(len(close_prices) * 0.7)
-train = close_prices.iloc[:split]
-test = close_prices.iloc[split:]
-
-scaler = MinMaxScaler()
-train_scaled = scaler.fit_transform(train)
-
 window = 100
-def make_sequences(data, window=100):
-    xs, ys = [], []
-    for i in range(window, len(data)):
-        xs.append(data[i-window:i])
-        ys.append(data[i,0])
-    return np.array(xs), np.array(ys)
+if len(close) >= window + 1:
+    scaler = MinMaxScaler()
+    train_data_len = int(len(close) * 0.7)
+    train_data = close[:train_data_len].values.reshape(-1,1)
+    test_data = close[train_data_len - window:].values.reshape(-1,1)
 
-X_train, y_train = make_sequences(train_scaled, window)
+    scaler.fit(train_data)
+    train_scaled = scaler.transform(train_data)
+    test_scaled = scaler.transform(test_data)
 
-model_path = f"{ticker}_lstm.keras"
-if os.path.exists(model_path):
-    model = load_model(model_path)
-    st.info("Loaded pre-trained LSTM model.")
+    def create_dataset(dataset, window):
+        x, y = [], []
+        for i in range(window, len(dataset)):
+            x.append(dataset[i-window:i, 0])
+            y.append(dataset[i, 0])
+        return np.array(x), np.array(y)
+
+    X_train, y_train = create_dataset(train_scaled, window)
+    X_test, y_test = create_dataset(test_scaled, window)
+
+    X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+    X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+    # Check shapes before training
+    st.write(f"Training set shape: {X_train.shape}  Testing set shape: {X_test.shape}")
+
+    model_path = f"{ticker}_lstm.keras"
+
+    if os.path.exists(model_path):
+        model = load_model(model_path)
+        st.info("Loaded existing LSTM model.")
+    else:
+        with st.spinner("Training LSTM model..."):
+            model = Sequential()
+            model.add(LSTM(units=60, activation='relu', return_sequences=True, input_shape=(window, 1)))
+            model.add(Dropout(0.2))
+            model.add(LSTM(units=60, activation='relu'))
+            model.add(Dropout(0.2))
+            model.add(Dense(1))
+
+            model.compile(optimizer='adam', loss='mean_squared_error')
+            model.fit(X_train, y_train, epochs=15, batch_size=32, verbose=0)
+            model.save(model_path)
+        st.success("Model trained and saved!")
+
+    # Predict prices
+    y_pred = model.predict(X_test)
+    y_pred_inv = scaler.inverse_transform(y_pred)
+    y_test_inv = scaler.inverse_transform(y_test.reshape(-1,1))
+
+    # Plot predictions
+    st.subheader("Predicted vs Actual Price")
+    pred_fig = go.Figure()
+    pred_fig.add_trace(go.Scatter(y=y_test_inv.flatten(), mode='lines', name='Actual', line=dict(color='royalblue')))
+    pred_fig.add_trace(go.Scatter(y=y_pred_inv.flatten(), mode='lines', name='Predicted', line=dict(color='orangered')))
+    pred_fig.update_layout(xaxis_title="Time", yaxis_title="Price ($)", margin=dict(t=20,r=20,b=20,l=10))
+    st.plotly_chart(pred_fig, use_container_width=True)
+
 else:
-    with st.spinner("Training new LSTM model... Please wait."):
-        model = Sequential()
-        model.add(LSTM(60, activation='relu', return_sequences=True, input_shape=(X_train.shape[1], 1)))
-        model.add(Dropout(0.2))
-        model.add(LSTM(60, activation='relu'))
-        model.add(Dropout(0.2))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='mean_squared_error')
-        model.fit(X_train, y_train, epochs=15, batch_size=32, verbose=0)
-        model.save(model_path)
-    st.success("Model trained and saved.")
-
-# Testing
-total_data = pd.concat([train.tail(window), test])
-inputs = scaler.transform(total_data)
-X_test, y_test = make_sequences(inputs, window)
-
-# Prediction
-y_pred = model.predict(X_test)
-y_pred_inv = scaler.inverse_transform(np.concatenate([y_pred, np.zeros((y_pred.shape[0], 0))], axis=1))[:,0]
-y_test_inv = scaler.inverse_transform(np.concatenate([y_test.reshape(-1,1), np.zeros((y_test.shape[0], 0))], axis=1))[:,0]
-
-# Plot predictions
-st.subheader("Predicted vs Actual Closing Price")
-line_fig = go.Figure([
-    go.Scatter(y=y_test_inv, mode="lines", name="Actual", line=dict(color="royalblue")),
-    go.Scatter(y=y_pred_inv, mode="lines", name="Predicted", line=dict(color="orangered"))
-])
-line_fig.update_layout(xaxis_title="Time", yaxis_title="Price ($)", margin=dict(t=20,r=20,b=20,l=10))
-st.plotly_chart(line_fig, use_container_width=True)
-
-st.caption("Tip: Retrain model by deleting the .keras file. This is a research demo—do not use for investing decisions.")
+    st.info(f"Insufficient data to train LSTM model (need at least {window+1} prices).")
 
