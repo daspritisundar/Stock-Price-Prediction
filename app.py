@@ -65,13 +65,14 @@ st.subheader("Closing Price and Moving Averages (Interactive Chart)")
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=close.index, y=close, mode='lines', name='Close', line=dict(color='royalblue')))
 
-if ma100 is not None and ma100.size > 0 and ma100.notna().any():
+
+if ma100 is not None and ma100.size > 0 and np.any(ma100.notna().values):
     fig.add_trace(go.Scatter(x=ma100.index, y=ma100, mode='lines', name='100-Day MA', line=dict(color='firebrick')))
 else:
     if len(close) < 100:
         st.info("Not enough data for 100-Day Moving Average")
 
-if ma200 is not None and ma200.size > 0 and ma200.notna().any():
+if ma200 is not None and ma200.size > 0 and np.any(ma200.notna().values):
     fig.add_trace(go.Scatter(x=ma200.index, y=ma200, mode='lines', name='200-Day MA', line=dict(color='forestgreen')))
 else:
     if len(close) < 200:
