@@ -1,4 +1,45 @@
 import streamlit as st
+
+# Robust import block
+missing_packages = []
+
+try:
+    import yfinance as yf
+except ImportError:
+    missing_packages.append("yfinance")
+try:
+    import pandas as pd
+except ImportError:
+    missing_packages.append("pandas")
+try:
+    import numpy as np
+except ImportError:
+    missing_packages.append("numpy")
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    missing_packages.append("matplotlib")
+try:
+    import plotly.graph_objs as go
+except ImportError:
+    missing_packages.append("plotly")
+try:
+    from keras.models import Sequential, load_model
+    from keras.layers import LSTM, Dense, Dropout
+except ImportError:
+    missing_packages.append("keras / tensorflow")
+try:
+    from sklearn.preprocessing import MinMaxScaler
+except ImportError:
+    missing_packages.append("scikit-learn")
+
+if missing_packages:
+    st.error(f"The following packages are required but not installed: {', '.join(missing_packages)}. Please ensure your requirements.txt includes them and restart the app.")
+    st.stop()
+
+
+
+import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
